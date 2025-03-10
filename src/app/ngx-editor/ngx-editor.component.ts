@@ -17,6 +17,11 @@ interface Property {
   value: string;
 }
 
+interface EditorStats {
+  totalNodes: number;
+  selectedNodes: number;
+}
+
 @Component({
   selector: 'app-ngx-editor',
   standalone: true,
@@ -28,18 +33,49 @@ interface Property {
           <option value="">Insert Property...</option>
           <option *ngFor="let prop of properties" [value]="prop.id">{{prop.label}}</option>
         </select>
+        
+        <div class="toolbar-group">
+          <button *ngFor="let op of operators" 
+                  (click)="insertOperator(op)"
+                  class="toolbar-button">
+            {{op}}
+          </button>
+        </div>
+
+        <div class="toolbar-group">
+          <button *ngFor="let func of functions" 
+                  (click)="insertFunction(func)"
+                  class="toolbar-button">
+            {{func}}
+          </button>
+        </div>
+
         <a class="nav-link" [routerLink]="['/codemirror']">Switch to CodeMirror</a>
       </div>
+
       <div *ngIf="!isBrowser" class="editor-placeholder">
         Loading editor...
       </div>
-      <ngx-editor
-        *ngIf="isBrowser"
-        [editor]="editor"
-        [ngModel]="html"
-        (ngModelChange)="onChange($event)"
-        [placeholder]="'Type here...'"
-      ></ngx-editor>
+
+      <div class="editor-wrapper">
+        <ngx-editor
+          *ngIf="isBrowser"
+          [editor]="editor"
+          [ngModel]="html"
+          (ngModelChange)="onChange($event)"
+          [placeholder]="'Type here...'"
+        ></ngx-editor>
+
+        <div class="editor-stats">
+          <div>Total Nodes: {{stats.totalNodes}}</div>
+          <div>Selected Nodes: {{stats.selectedNodes}}</div>
+        </div>
+
+        <div class="raw-view">
+          <h4>Raw View</h4>
+          <pre>{{rawContent}}</pre>
+        </div>
+      </div>
     </div>
   `,
   styles: [`
@@ -54,11 +90,64 @@ interface Property {
       display: flex;
       gap: 1rem;
       align-items: center;
+      flex-wrap: wrap;
+      padding: 0.5rem;
+      background: #f5f5f5;
+      border-radius: 4px;
+    }
+    .toolbar-group {
+      display: flex;
+      gap: 0.5rem;
+      padding: 0 0.5rem;
+      border-left: 1px solid #ddd;
+    }
+    .toolbar-button {
+      padding: 4px 8px;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      background: white;
+      cursor: pointer;
+      font-size: 14px;
+      color: #1976d2;
+      transition: all 0.2s;
+    }
+    .toolbar-button:hover {
+      background: #e3f2fd;
+      border-color: #1976d2;
     }
     .nav-link {
       text-decoration: none;
       color: #1976d2;
       font-weight: 500;
+    }
+    .editor-wrapper {
+      display: grid;
+      grid-template-columns: 1fr 300px;
+      gap: 1rem;
+      height: calc(100vh - 120px);
+    }
+    .editor-stats {
+      padding: 1rem;
+      background: #f5f5f5;
+      border-radius: 4px;
+      font-size: 14px;
+    }
+    .raw-view {
+      padding: 1rem;
+      background: #f5f5f5;
+      border-radius: 4px;
+      overflow: auto;
+    }
+    .raw-view h4 {
+      margin: 0 0 0.5rem 0;
+      font-size: 14px;
+      color: #666;
+    }
+    .raw-view pre {
+      margin: 0;
+      font-size: 12px;
+      white-space: pre-wrap;
+      word-break: break-all;
     }
     .editor-placeholder {
       min-height: 200px;
@@ -153,6 +242,14 @@ export class NgxEditorComponent implements OnInit, OnDestroy {
   editor!: Editor;
   html = '';
   isBrowser: boolean;
+  rawContent = '';
+  stats: EditorStats = {
+    totalNodes: 0,
+    selectedNodes: 0
+  };
+
+  operators = ['+', '-', '*', '/', '(', ')'];
+  functions = ['Avg()', 'Sum()', 'Scale()'];
 
   properties: Property[] = [
     { label: 'temperature', id: '1', value: '25°C' },
@@ -195,6 +292,9 @@ export class NgxEditorComponent implements OnInit, OnDestroy {
                   newState.selection.node.type.name === 'property') {
                 console.log('Property node selected:', newState.selection.node);
               }
+              // Update stats after each transaction
+              this.updateStats(newState);
+              this.updateRawView(newState);
             }
           }
         })
@@ -205,6 +305,47 @@ export class NgxEditorComponent implements OnInit, OnDestroy {
     });
   }
 
+  private updateStats(state: any): void {
+    let totalNodes = 0;
+    let selectedNodes = 0;
+
+    state.doc.descendants((node: Node) => {
+      if (node.type.name === 'property') {
+        totalNodes++;
+        if (state.selection instanceof NodeSelection && 
+            state.selection.node === node) {
+          selectedNodes++;
+        }
+      }
+    });
+
+    this.stats = { totalNodes, selectedNodes };
+  }
+
+  private updateRawView(state: any): void {
+    const content: string[] = [];
+    state.doc.descendants((node: Node, pos: number) => {
+      if (node.type.name === 'property') {
+        content.push(`${node.attrs['label']}`);
+      } else if (node.text) {
+        content.push(node.text);
+      }
+    });
+    this.rawContent = content.join(' ');
+  }
+
+  insertOperator(op: string): void {
+    const view = this.editor.view;
+    const { state } = view;
+    view.dispatch(state.tr.insertText(op + ' '));
+  }
+
+  insertFunction(func: string): void {
+    const view = this.editor.view;
+    const { state } = view;
+    view.dispatch(state.tr.insertText(func + ' '));
+  }
+
   ngOnDestroy(): void {
     if (this.isBrowser && this.editor) {
       this.editor.destroy();
@@ -213,6 +354,9 @@ export class NgxEditorComponent implements OnInit, OnDestroy {
 
   onChange(html: string): void {
     this.html = html;
+    const state = this.editor.view.state;
+    this.updateStats(state);
+    this.updateRawView(state);
   }
 
   insertProperty(event: Event): void {
