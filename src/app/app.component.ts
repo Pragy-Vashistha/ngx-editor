@@ -113,7 +113,10 @@ const propertyWidgetsField = StateField.define<PropertyWidget[]>({
           <option value="">Insert Property...</option>
           <option *ngFor="let prop of properties" [value]="prop.label">{{prop.label}}</option>
         </select>
-        <a class="nav-link" [routerLink]="['/ngx-editor']">Switch to NgxEditor</a>
+        <div class="nav-links">
+          <a class="nav-link" [routerLink]="['/ngx-editor']">Switch to NgxEditor</a>
+          <a class="nav-link" [routerLink]="['/prosemirror']">Switch to ProseMirror</a>
+        </div>
       </div>
       <div #editor class="editor"></div>
     </div>
@@ -173,6 +176,10 @@ const propertyWidgetsField = StateField.define<PropertyWidget[]>({
     :host ::ng-deep .cm-scroller {
       font-family: monospace;
       line-height: 1.4;
+    }
+    .nav-links {
+      display: flex;
+      gap: 1rem;
     }
   `]
 })
