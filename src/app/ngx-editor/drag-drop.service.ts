@@ -2,6 +2,9 @@ import { Injectable } from '@angular/core';
 import { Plugin, PluginKey, EditorState } from 'prosemirror-state';
 import { Node } from 'prosemirror-model';
 
+/**
+ * Interface representing the state of drag and drop operations
+ */
 export interface DragDropState {
   lastTarget: HTMLElement | null;
   insertionType: 'before' | 'after' | null;
@@ -11,12 +14,20 @@ export interface DragDropState {
   originalNodeSize: number | null;
 }
 
+/**
+ * Service handling drag and drop functionality for property nodes
+ * Implements ProseMirror plugin for custom drag and drop behavior
+ */
 @Injectable({
   providedIn: 'root'
 })
 export class DragDropService {
   private readonly pluginKey = new PluginKey('dragDropTracker');
 
+  /**
+   * Creates a ProseMirror plugin for drag and drop functionality
+   * @returns Plugin instance with drag and drop state management
+   */
   createPlugin(): Plugin<DragDropState> {
     return new Plugin<DragDropState>({
       key: this.pluginKey,
@@ -42,6 +53,11 @@ export class DragDropService {
     });
   }
 
+  /**
+   * Retrieves current drag and drop state from editor state
+   * @param state Current editor state
+   * @returns Current drag and drop state
+   */
   private getState(state: EditorState): DragDropState {
     return this.pluginKey.getState(state) || {
       lastTarget: null,
@@ -53,11 +69,22 @@ export class DragDropService {
     };
   }
 
+  /**
+   * Finds the first valid position in the document for dropping a node
+   * @param view Editor view instance
+   * @returns Position index where node can be dropped
+   */
   private findFirstValidPosition(view: any): number {
     const firstNode = view.state.doc.firstChild;
     return firstNode ? firstNode.nodeSize : 0;
   }
 
+  /**
+   * Validates if a position is valid for dropping a node
+   * @param pos Position to validate
+   * @param view Editor view instance
+   * @returns Boolean indicating if position is valid
+   */
   private isValidDropPosition(pos: number, view: any): boolean {
     if (pos === 0) return false;
     const doc = view.state.doc;
@@ -74,6 +101,12 @@ export class DragDropService {
     return isValid;
   }
 
+  /**
+   * Finds the nearest valid position for dropping a node
+   * @param pos Current position
+   * @param view Editor view instance
+   * @returns Nearest valid position for dropping
+   */
   private findNearestValidPosition(pos: number, view: any): number {
     const doc = view.state.doc;
     let nearestPos = -1;
@@ -99,6 +132,10 @@ export class DragDropService {
     return nearestPos >= 0 ? nearestPos : this.findFirstValidPosition(view);
   }
 
+  /**
+   * Handles the start of drag operation
+   * Sets up drag data and visual feedback
+   */
   private handleDragStart(view: any, event: DragEvent): boolean {
     const target = event.target as HTMLElement;
     if (!target.classList.contains('property-node')) return false;
@@ -130,6 +167,10 @@ export class DragDropService {
     return true;
   }
 
+  /**
+   * Handles drag over events
+   * Updates visual feedback and validates drop positions
+   */
   private handleDragOver(view: any, event: DragEvent): boolean {
     event.preventDefault();
     const target = event.target as HTMLElement;
@@ -169,6 +210,10 @@ export class DragDropService {
     return true;
   }
 
+  /**
+   * Handles drop events
+   * Performs the actual node movement in the document
+   */
   private handleDrop(view: any, event: DragEvent): boolean {
     event.preventDefault();
     view.dom.classList.remove('drag-active');
@@ -225,6 +270,10 @@ export class DragDropService {
     }
   }
 
+  /**
+   * Handles the end of drag operation
+   * Cleans up visual feedback and resets state
+   */
   private handleDragEnd(view: any): boolean {
     view.dom.classList.remove('drag-active');
     view.dom.querySelectorAll('.property-node').forEach((node: Element) => {
@@ -236,6 +285,10 @@ export class DragDropService {
     return false;
   }
 
+  /**
+   * Resets drag and drop state to initial values
+   * @param state Current drag and drop state
+   */
   private resetState(state: DragDropState): void {
     state.lastTarget = null;
     state.insertionType = null;

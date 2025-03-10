@@ -11,17 +11,10 @@ import { isPlatformBrowser } from '@angular/common';
 import { PropertyNodeService } from './property-node.service';
 import { DragDropService } from './drag-drop.service';
 
-interface Property {
-  label: string;
-  id: string;
-  value: string;
-}
-
-interface EditorStats {
-  totalNodes: number;
-  selectedNodes: number;
-}
-
+/**
+ * Main editor component that integrates ngx-editor with custom property nodes
+ * Provides a rich text editor with support for draggable property nodes
+ */
 @Component({
   selector: 'app-ngx-editor',
   standalone: true,
@@ -248,9 +241,13 @@ export class NgxEditorComponent implements OnInit, OnDestroy {
     selectedNodes: 0
   };
 
+  // Available operators for formula building
   operators = ['+', '-', '*', '/', '(', ')'];
+  
+  // Available functions for formula building
   functions = ['Avg()', 'Sum()', 'Scale()'];
 
+  // Sample properties that can be inserted into the editor
   properties: Property[] = [
     { label: 'temperature', id: '1', value: '25°C' },
     { label: 'speed', id: '2', value: '60 km/h' },
@@ -265,6 +262,10 @@ export class NgxEditorComponent implements OnInit, OnDestroy {
     this.isBrowser = isPlatformBrowser(platformId);
   }
 
+  /**
+   * Initializes the editor with custom schema and plugins
+   * Sets up property nodes and drag-drop functionality
+   */
   ngOnInit(): void {
     if (!this.isBrowser) return;
 
@@ -305,6 +306,11 @@ export class NgxEditorComponent implements OnInit, OnDestroy {
     });
   }
 
+  /**
+   * Updates editor statistics based on current state
+   * Tracks total nodes and selected nodes
+   * @param state Current editor state
+   */
   private updateStats(state: any): void {
     let totalNodes = 0;
     let selectedNodes = 0;
@@ -322,6 +328,11 @@ export class NgxEditorComponent implements OnInit, OnDestroy {
     this.stats = { totalNodes, selectedNodes };
   }
 
+  /**
+   * Updates the raw view of editor content
+   * Shows simplified text representation of the document
+   * @param state Current editor state
+   */
   private updateRawView(state: any): void {
     const content: string[] = [];
     state.doc.descendants((node: Node, pos: number) => {
@@ -334,24 +345,40 @@ export class NgxEditorComponent implements OnInit, OnDestroy {
     this.rawContent = content.join(' ');
   }
 
+  /**
+   * Inserts an operator at current cursor position
+   * @param op Operator to insert
+   */
   insertOperator(op: string): void {
     const view = this.editor.view;
     const { state } = view;
     view.dispatch(state.tr.insertText(op + ' '));
   }
 
+  /**
+   * Inserts a function at current cursor position
+   * @param func Function to insert
+   */
   insertFunction(func: string): void {
     const view = this.editor.view;
     const { state } = view;
     view.dispatch(state.tr.insertText(func + ' '));
   }
 
+  /**
+   * Cleans up editor resources on component destruction
+   */
   ngOnDestroy(): void {
     if (this.isBrowser && this.editor) {
       this.editor.destroy();
     }
   }
 
+  /**
+   * Handles changes to editor content
+   * Updates HTML content and statistics
+   * @param html Updated HTML content
+   */
   onChange(html: string): void {
     this.html = html;
     const state = this.editor.view.state;
@@ -359,6 +386,11 @@ export class NgxEditorComponent implements OnInit, OnDestroy {
     this.updateRawView(state);
   }
 
+  /**
+   * Inserts a property node at current selection
+   * Creates a new property node with selected attributes
+   * @param event Select element change event
+   */
   insertProperty(event: Event): void {
     const select = event.target as HTMLSelectElement;
     const propertyId = select.value;
@@ -378,4 +410,21 @@ export class NgxEditorComponent implements OnInit, OnDestroy {
     view.updateState(state.apply(state.tr.replaceSelectionWith(node).scrollIntoView()));
     select.value = '';
   }
+}
+
+/**
+ * Interface for property node data
+ */
+interface Property {
+  label: string;
+  id: string;
+  value: string;
+}
+
+/**
+ * Interface for tracking editor statistics
+ */
+interface EditorStats {
+  totalNodes: number;
+  selectedNodes: number;
 }
