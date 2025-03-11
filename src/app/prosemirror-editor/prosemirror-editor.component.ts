@@ -2,7 +2,7 @@ import { Component, OnInit, OnDestroy, ViewEncapsulation, PLATFORM_ID, Inject, E
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { RouterLink } from '@angular/router';
-import { Schema, Node } from 'prosemirror-model';
+import { Schema, Node, Slice } from 'prosemirror-model';
 import { EditorState, Plugin, PluginKey, NodeSelection } from 'prosemirror-state';
 import { EditorView } from 'prosemirror-view';
 import { history } from 'prosemirror-history';
@@ -53,6 +53,12 @@ interface Property {
           </button>
         </div>
 
+        <div class="toolbar-group">
+          <button (click)="loadDemoContent()" class="toolbar-button">
+            Load Demo Content
+          </button>
+        </div>
+
         <a class="nav-link" [routerLink]="['/codemirror']">Switch to CodeMirror</a>
       </div>
 
@@ -71,6 +77,8 @@ interface Property {
         <div class="raw-view">
           <h4>Raw View</h4>
           <pre>{{rawContent}}</pre>
+          <h4>JSON View</h4>
+          <pre>{{jsonContent}}</pre>
         </div>
 
         <div class="error-panel" *ngIf="syntaxErrors.length > 0">
@@ -333,6 +341,7 @@ export class ProsemirrorEditorComponent implements OnInit, OnDestroy {
   
   isBrowser: boolean;
   rawContent = '';
+  jsonContent = '{}';
   stats: EditorStats = {
     totalNodes: 0,
     selectedNodes: 0
@@ -431,6 +440,94 @@ export class ProsemirrorEditorComponent implements OnInit, OnDestroy {
     }
   }
 
+  /**
+   * Sets the editor content from a raw string expression and parameters from API
+   * @param expression The raw string expression (e.g., "temperature + speed")
+   * @param parameters List of parameters with IDs and names
+   * @returns An object with success status and any validation errors
+   */
+  setEditorContentFromApi(expression: string, parameters: { Id: string; Name: string }[]): { success: boolean; errors?: string[] } {
+    if (!this.isBrowser || !this.editorView) {
+      return { success: false, errors: ['Editor not initialized'] };
+    }
+    
+    // Validate that all property tokens exist in the parameters list
+    const validationResult = this.validateExpression(expression, parameters);
+    if (!validationResult.success) {
+      return validationResult;
+    }
+
+    // Create a set of property names for quick lookup
+    const propertyNames = new Set(parameters.map(p => p.Name));
+
+    // Tokenize the expression (simple space-separated for now)
+    const tokens = expression.split(/\s+/); // e.g., ["temperature", "+", "speed"]
+
+    // Build inline nodes
+    const inlineNodes = tokens.map(token => {
+      if (propertyNames.has(token)) {
+        const param = parameters.find(p => p.Name === token);
+        if (param) {
+          // Create a property node with only label and id (no value displayed)
+          return this.schema.nodes['property'].create({
+            id: param.Id,
+            label: param.Name,
+            value: '' // Value not displayed, set to empty
+          });
+        }
+      }
+      // Non-property tokens (e.g., operators) become text nodes
+      return this.schema.text(token);
+    }).filter(node => node); // Remove undefined nodes
+
+    // Create paragraph and document nodes
+    const paragraph = this.schema.nodes['paragraph'].create(null, inlineNodes);
+    const doc = this.schema.nodes['doc'].create(null, [paragraph]);
+
+    // Update editor state using a transaction
+    const tr = this.editorView.state.tr;
+    tr.replace(0, this.editorView.state.doc.content.size, new Slice(doc.content, 0, 0));
+    this.editorView.dispatch(tr);
+    
+    return { success: true };
+  }
+
+  /**
+   * Gets the editor content as a raw string expression
+   * @returns A space-separated string of property labels and text content
+   */
+  getEditorContentAsString(): string {
+    const content: string[] = [];
+    this.editorView.state.doc.descendants((node) => {
+      if (node.type.name === 'property') {
+        content.push(node.attrs['label']); // Use label only
+      } else if (node.isText) {
+        content.push(node.text || '');
+      }
+    });
+    return content.join(' '); // e.g., "temperature + speed"
+  }
+
+  /**
+   * Gets the editor content as a JSON object for full state preservation
+   * @returns JSON representation of the editor document
+   */
+  getEditorContentAsJson(): any {
+    return this.editorView.state.doc.toJSON();
+  }
+
+  /**
+   * Sets the editor content from a previously saved JSON state
+   * @param json JSON representation of the editor document
+   */
+  setEditorContentFromJson(json: any): void {
+    if (!this.isBrowser || !this.editorView) return;
+    const doc = this.schema.nodeFromJSON(json);
+    const tr = this.editorView.state.tr;
+    tr.replace(0, this.editorView.state.doc.content.size, new Slice(doc.content, 0, 0));
+    this.editorView.dispatch(tr);
+  }
+
   private updateStats(state: EditorState): void {
     let totalNodes = 0;
     let selectedNodes = 0;
@@ -453,12 +550,15 @@ export class ProsemirrorEditorComponent implements OnInit, OnDestroy {
     const content: string[] = [];
     state.doc.descendants((node) => {
       if (node.type.name === 'property') {
-        content.push(`${node.attrs['label']} (${node.attrs['value']})`);
+        content.push(`${node.attrs['label']}`);
       } else if (node.isText) {
         content.push(node.text || '');
       }
     });
     this.rawContent = content.join(' ');
+    
+    // Update JSON content
+    this.jsonContent = JSON.stringify(state.doc.toJSON(), null, 2);
   }
 
   insertOperator(op: string): void {
@@ -490,5 +590,87 @@ export class ProsemirrorEditorComponent implements OnInit, OnDestroy {
       state.tr.replaceSelectionWith(node).scrollIntoView()
     );
     select.value = '';
+  }
+
+  /**
+   * Demonstrates how to use setEditorContentFromApi by loading a sample expression
+   */
+  loadDemoContent(): void {
+    // Sample API data
+    const apiExpression = "temperature + pressure";
+    const apiParameters = [
+      { Id: "1", Name: "temperature" },
+      { Id: "3", Name: "pressure" }
+    ];
+    
+    // Set editor content with API data and handle validation
+    const result = this.setEditorContentFromApi(apiExpression, apiParameters);
+    
+    if (!result.success && result.errors) {
+      console.error('Validation errors:', result.errors);
+      // In a real application, you might want to display these errors to the user
+      // For example: this.errorMessage = result.errors.join('\n');
+    }
+  }
+  
+  /**
+   * Validates an expression to ensure all property tokens exist in the parameters list
+   * @param expression The raw string expression to validate
+   * @param parameters List of valid parameters with Id and Name
+   * @returns Validation result with success status and any errors
+   */
+  validateExpression(expression: string, parameters: { Id: string; Name: string }[]): { success: boolean; errors?: string[] } {
+    if (!expression || !parameters) {
+      return { success: false, errors: ['Missing expression or parameters'] };
+    }
+    
+    const errors: string[] = [];
+    const propertyNames = new Set(parameters.map(p => p.Name));
+    const operators = ['+', '-', '*', '/', '(', ')'];
+    
+    // Tokenize the expression
+    const tokens = expression.split(/\s+/);
+    
+    // Check each token that's not an operator or number
+    tokens.forEach(token => {
+      // Skip operators and numbers
+      if (operators.includes(token) || !isNaN(Number(token))) {
+        return;
+      }
+      
+      // Check if token is a valid parameter name
+      if (!propertyNames.has(token)) {
+        errors.push(`Property '${token}' not found in available properties`);
+      }
+    });
+    
+    return errors.length > 0 ? { success: false, errors } : { success: true };
+  }
+  
+  /**
+   * Validates that all properties in the editor exist in the provided parameters list
+   * @param parameters List of valid parameters with Id and Name
+   * @returns Validation result with success status and any errors
+   */
+  validateEditorContent(parameters: { Id: string; Name: string }[]): { success: boolean; errors?: string[] } {
+    if (!this.editorView) {
+      return { success: false, errors: ['Editor not initialized'] };
+    }
+    
+    const errors: string[] = [];
+    const propertyNames = new Set(parameters.map(p => p.Name));
+    
+    // Check each property node in the document
+    this.editorView.state.doc.descendants((node) => {
+      if (node.type.name === 'property') {
+        const propertyLabel = node.attrs['label'];
+        
+        if (!propertyNames.has(propertyLabel)) {
+          errors.push(`Property '${propertyLabel}' not found in available properties`);
+        }
+      }
+    });
+    
+    return errors.length > 0 ? { success: false, errors } : { success: true };
   }
 } 

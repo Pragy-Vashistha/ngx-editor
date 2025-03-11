@@ -153,9 +153,11 @@ export class DragDropService {
     const id = target.getAttribute('data-id') || '';
     const content = target.querySelector('.property-content');
     const text = content?.textContent || '';
-    const match = text.match(/(.+) \((.+)\)/);
-    const label = match ? match[1] : '';
-    const value = match ? match[2] : '';
+    
+    // Since we now only display the label without the value in parentheses,
+    // we'll use the text content directly as the label
+    const label = text;
+    const value = ''; // Value is not displayed anymore
 
     event.dataTransfer?.setData('application/prosemirror-node', JSON.stringify({
       type: 'property',

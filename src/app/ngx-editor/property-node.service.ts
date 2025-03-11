@@ -42,10 +42,11 @@ export class PropertyNodeService {
       const wrapper = document.createElement('span');
       wrapper.className = 'property-node';
       wrapper.contentEditable = 'false';
-      wrapper.setAttribute('aria-label', `Property: ${node.attrs['label']}, Value: ${node.attrs['value']}`);
+      wrapper.setAttribute('aria-label', `Property: ${node.attrs['label']}`);
+      wrapper.setAttribute('data-id', node.attrs['id']); // Add data-id attribute for drag and drop
       const content = document.createElement('span');
       content.className = 'property-content';
-      content.textContent = `${node.attrs['label']} (${node.attrs['value']})`;
+      content.textContent = node.attrs['label']; // Only show label
       wrapper.appendChild(content);
       return wrapper;
     },
@@ -55,8 +56,7 @@ export class PropertyNodeService {
         const node = dom as HTMLElement;
         const content = node.querySelector('.property-content');
         const text = content?.textContent || '';
-        const match = text.match(/(.+) \((.+)\)/);
-        return match ? { label: match[1], value: match[2], id: node.getAttribute('data-id') || '' } : {};
+        return { label: text, value: '', id: node.getAttribute('data-id') || '' };
       }
     }]
   };
@@ -95,13 +95,13 @@ class PropertyNodeView implements NodeView {
     this.dom = document.createElement('span');
     this.dom.className = 'property-node';
     this.dom.setAttribute('data-id', node.attrs['id']);
-    this.dom.setAttribute('aria-label', `Property: ${node.attrs['label']}, Value: ${node.attrs['value']}`);
+    this.dom.setAttribute('aria-label', `Property: ${node.attrs['label']}`);
     this.dom.draggable = true;
     this.dom.contentEditable = 'false';
 
     const content = document.createElement('span');
     content.className = 'property-content';
-    content.textContent = `${node.attrs['label']} (${node.attrs['value']})`;
+    content.textContent = node.attrs['label']; // Only show label
     this.dom.appendChild(content);
 
     this.contentDOM = null;
@@ -130,10 +130,10 @@ class PropertyNodeView implements NodeView {
     if (node.type.name !== 'property') return false;
     this.node = node;
     this.dom.setAttribute('data-id', node.attrs['id']);
-    this.dom.setAttribute('aria-label', `Property: ${node.attrs['label']}, Value: ${node.attrs['value']}`);
+    this.dom.setAttribute('aria-label', `Property: ${node.attrs['label']}`);
     const content = this.dom.querySelector('.property-content');
     if (content) {
-      content.textContent = `${node.attrs['label']} (${node.attrs['value']})`;
+      content.textContent = node.attrs['label']; // Only show label
     }
     return true;
   }
