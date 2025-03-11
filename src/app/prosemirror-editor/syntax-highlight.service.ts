@@ -3,59 +3,39 @@ import { Node } from 'prosemirror-model';
 import { EditorState, Plugin, PluginKey } from 'prosemirror-state';
 import { Decoration, DecorationSet } from 'prosemirror-view';
 
-// Token types for syntax highlighting
-export enum TokenType {
-  Operator = 'operator',
-  Function = 'function',
-  Property = 'property',
-  Number = 'number',
-  Bracket = 'bracket',
-  Error = 'error'
-}
+export const syntaxHighlightKey = new PluginKey('syntaxHighlight');
 
-// Token interface for parsed content
 interface Token {
-  type: TokenType;
+  type: 'operator' | 'number' | 'function' | 'property' | 'bracket' | 'error';
   from: number;
   to: number;
   text: string;
-}
-
-// Error interface for linting
-interface SyntaxError {
-  from: number;
-  to: number;
-  message: string;
+  isPropertyNode?: boolean;
 }
 
 @Injectable({
   providedIn: 'root'
 })
 export class SyntaxHighlightService {
-  // Known operators, functions, and properties
-  private operators = ['+', '-', '*', '/', '(', ')'];
-  private functions = ['Avg', 'Sum', 'Scale'];
-  private propertyLabels: string[] = [];
+  private propertyLabels: Set<string> = new Set();
+  private functionNames: Set<string> = new Set(['Avg', 'Sum', 'Scale']);
 
-  // Set available property labels for highlighting
-  setPropertyLabels(labels: string[]): void {
-    this.propertyLabels = labels;
+  setPropertyLabels(labels: string[]) {
+    this.propertyLabels = new Set(labels);
   }
 
-  // Create a plugin for syntax highlighting, bracket matching, and linting
-  createSyntaxHighlightPlugin(): Plugin {
+  createPlugin(): Plugin {
     return new Plugin({
-      key: new PluginKey('syntaxHighlight'),
+      key: syntaxHighlightKey,
       state: {
-        init: () => DecorationSet.empty,
-        apply: (tr, oldSet, oldState, newState) => {
-          // Reapply decorations if document changed or selection changed
-          if (tr.docChanged || tr.selection !== oldState.selection) {
-            return this.getDecorations(newState);
+        init: (_, { doc }) => {
+          return this.getDecorations(doc);
+        },
+        apply: (tr, oldState) => {
+          if (!tr.docChanged) {
+            return oldState.map(tr.mapping, tr.doc);
           }
-          
-          // Map decorations through document changes
-          return oldSet.map(tr.mapping, tr.doc);
+          return this.getDecorations(tr.doc);
         }
       },
       props: {
@@ -66,17 +46,51 @@ export class SyntaxHighlightService {
     });
   }
 
-  // Get all decorations for the current document state
-  private getDecorations(state: EditorState): DecorationSet {
-    const doc = state.doc;
+  private errors: Array<{ message: string, token: Token }> = [];
+
+  getErrors(): Array<{ message: string, token: Token }> {
+    return this.errors;
+  }
+
+  private getDecorations(doc: Node): DecorationSet {
     const decorations: Decoration[] = [];
+    const tokens: Token[] = [];
     
-    // Parse the document for tokens
-    const tokens = this.parseDocument(doc);
+    doc.descendants((node, pos) => {
+      if (node.type.name === 'property') {
+        tokens.push({
+          type: 'property',
+          from: pos,
+          to: pos + node.nodeSize,
+          text: node.attrs['label'],
+          isPropertyNode: true
+        });
+      } else if (node.isText) {
+        tokens.push(...this.tokenize(node.text || '', pos));
+      }
+      return true;
+    });
+
+    // Sort tokens by position
+    tokens.sort((a, b) => a.from - b.from);
     
-    // Add syntax highlighting decorations
+    // Validate and get errors
+    const validationErrors = this.validateTokens(tokens);
+    this.errors = validationErrors;
+    
+    // Add decorations
     tokens.forEach(token => {
-      if (token.type !== TokenType.Error) {
+      const hasError = validationErrors.some(err => err.token === token);
+
+      if (hasError && !token.isPropertyNode) {
+        decorations.push(
+          Decoration.inline(token.from, token.to, {
+            class: 'syntax-error'
+          })
+        );
+      }
+
+      if (!token.isPropertyNode) {
         decorations.push(
           Decoration.inline(token.from, token.to, {
             class: `syntax-${token.type}`
@@ -84,247 +98,204 @@ export class SyntaxHighlightService {
         );
       }
     });
-    
-    // Add bracket matching decorations if cursor is at a bracket
-    const bracketMatch = this.findMatchingBracket(state);
-    if (bracketMatch) {
-      decorations.push(
-        Decoration.inline(bracketMatch.open.from, bracketMatch.open.to, {
-          class: 'bracket-match'
-        }),
-        Decoration.inline(bracketMatch.close.from, bracketMatch.close.to, {
-          class: 'bracket-match'
-        })
-      );
-    }
-    
-    // Add linting decorations
-    const errors = this.lintDocument(tokens);
-    errors.forEach(error => {
-      decorations.push(
-        Decoration.inline(error.from, error.to, {
-          class: 'syntax-error',
-          title: error.message
-        })
-      );
-    });
-    
+
     return DecorationSet.create(doc, decorations);
   }
 
-  // Parse the document into tokens
-  private parseDocument(doc: Node): Token[] {
+  private tokenize(text: string, offset: number): Token[] {
     const tokens: Token[] = [];
-    
-    // Process each text node
-    doc.descendants((node, pos) => {
-      if (node.isText) {
-        const text = node.text || '';
-        let index = 0;
-        
-        // Process the text character by character
-        while (index < text.length) {
-          // Skip whitespace
-          if (/\s/.test(text[index])) {
-            index++;
-            continue;
-          }
-          
-          // Check for operators
-          if (this.operators.includes(text[index])) {
-            const type = text[index] === '(' || text[index] === ')' 
-              ? TokenType.Bracket 
-              : TokenType.Operator;
-            
-            tokens.push({
-              type,
-              from: pos + index,
-              to: pos + index + 1,
-              text: text[index]
-            });
-            
-            index++;
-            continue;
-          }
-          
-          // Check for numbers
-          if (/\d/.test(text[index])) {
-            const start = index;
-            while (index < text.length && /[\d.]/.test(text[index])) {
-              index++;
-            }
-            
-            tokens.push({
-              type: TokenType.Number,
-              from: pos + start,
-              to: pos + index,
-              text: text.slice(start, index)
-            });
-            
-            continue;
-          }
-          
-          // Check for functions and properties
-          if (/[A-Za-z]/.test(text[index])) {
-            const start = index;
-            while (index < text.length && /[A-Za-z0-9_]/.test(text[index])) {
-              index++;
-            }
-            
-            const word = text.slice(start, index);
-            
-            // Check if it's a function
-            if (this.functions.some(f => f === word)) {
-              tokens.push({
-                type: TokenType.Function,
-                from: pos + start,
-                to: pos + index,
-                text: word
-              });
-            } 
-            // Check if it's a property
-            else if (this.propertyLabels.some(p => p === word)) {
-              tokens.push({
-                type: TokenType.Property,
-                from: pos + start,
-                to: pos + index,
-                text: word
-              });
-            }
-            
-            continue;
-          }
-          
-          // Skip any other character
-          index++;
-        }
+    let pos = 0;
+
+    while (pos < text.length) {
+      let match: RegExpExecArray | null;
+      
+      // Skip whitespace
+      if (/\s/.test(text[pos])) {
+        pos++;
+        continue;
       }
-    });
-    
+
+      // Match operators and comma
+      if ((match = /^[+\-*/,]/.exec(text.slice(pos)))) {
+        tokens.push({
+          type: 'operator',
+          from: offset + pos,
+          to: offset + pos + match[0].length,
+          text: match[0]
+        });
+        pos += match[0].length;
+        continue;
+      }
+
+      // Match brackets
+      if ((match = /^[()]/.exec(text.slice(pos)))) {
+        tokens.push({
+          type: 'bracket',
+          from: offset + pos,
+          to: offset + pos + 1,
+          text: match[0]
+        });
+        pos += 1;
+        continue;
+      }
+
+      // Match numbers
+      if ((match = /^\d+(\.\d+)?/.exec(text.slice(pos)))) {
+        tokens.push({
+          type: 'number',
+          from: offset + pos,
+          to: offset + pos + match[0].length,
+          text: match[0]
+        });
+        pos += match[0].length;
+        continue;
+      }
+
+      // Match functions or properties (identifiers)
+      if ((match = /^[a-zA-Z_][a-zA-Z0-9_]*/.exec(text.slice(pos)))) {
+        const identifier = match[0];
+        const type = this.functionNames.has(identifier) ? 'function' :
+                    this.propertyLabels.has(identifier) ? 'property' : 'error';
+        
+        tokens.push({
+          type,
+          from: offset + pos,
+          to: offset + pos + identifier.length,
+          text: identifier
+        });
+        pos += identifier.length;
+        continue;
+      }
+
+      // Skip unrecognized character
+      pos++;
+    }
+
     return tokens;
   }
 
-  // Find matching brackets when cursor is at a bracket
-  private findMatchingBracket(state: EditorState): { open: Token, close: Token } | null {
-    const { doc, selection } = state;
-    const { from } = selection;
-    
-    // Get character at cursor position
-    const pos = from - 1;
-    if (pos < 0) return null;
-    
-    const charBefore = doc.textBetween(pos, pos + 1);
-    const charAfter = doc.textBetween(from, from + 1);
-    
-    // Check if cursor is at a bracket
-    if (charBefore !== '(' && charBefore !== ')' && 
-        charAfter !== '(' && charAfter !== ')') {
-      return null;
-    }
-    
-    // Find all brackets in the document
-    const brackets: Token[] = [];
-    doc.descendants((node, nodePos) => {
-      if (node.isText) {
-        const text = node.text || '';
-        for (let i = 0; i < text.length; i++) {
-          if (text[i] === '(' || text[i] === ')') {
-            brackets.push({
-              type: TokenType.Bracket,
-              from: nodePos + i,
-              to: nodePos + i + 1,
-              text: text[i]
+  private validateTokens(tokens: Token[]): Array<{ message: string, token: Token }> {
+    const errors: Array<{ message: string, token: Token }> = [];
+    let expectingOperand = true;
+    const parenStack: Array<{ token: Token, isFunction: boolean }> = [];
+    let lastToken: Token | null = null;
+    let insideFunction = false;
+    let expectingComma = false;
+
+    tokens.forEach((token, i) => {
+      if (token.type === 'function') {
+        if (!expectingOperand && lastToken && 
+            lastToken.type !== 'operator' && 
+            lastToken.type !== 'bracket') {
+          errors.push({
+            message: `Missing operator before function '${token.text}'`,
+            token
+          });
+        }
+        expectingOperand = false;
+      } 
+      else if (token.type === 'bracket') {
+        if (token.text === '(') {
+          const isFunction = lastToken?.type === 'function';
+          if (!isFunction && !expectingOperand && lastToken && 
+              lastToken.type !== 'operator' && 
+              lastToken.type !== 'bracket') {
+            errors.push({
+              message: `Missing operator before '('`,
+              token
             });
           }
-        }
-      }
-    });
-    
-    // Find the bracket at or near cursor position
-    const cursorBracket = brackets.find(b => 
-      (charBefore === '(' || charBefore === ')') ? b.from === pos : b.from === from
-    );
-    
-    if (!cursorBracket) return null;
-    
-    // Find matching bracket
-    if (cursorBracket.text === '(') {
-      // Find closing bracket
-      let depth = 1;
-      for (let i = brackets.indexOf(cursorBracket) + 1; i < brackets.length; i++) {
-        if (brackets[i].text === '(') depth++;
-        else if (brackets[i].text === ')') depth--;
-        
-        if (depth === 0) {
-          return { open: cursorBracket, close: brackets[i] };
-        }
-      }
-    } else {
-      // Find opening bracket
-      let depth = 1;
-      for (let i = brackets.indexOf(cursorBracket) - 1; i >= 0; i--) {
-        if (brackets[i].text === ')') depth++;
-        else if (brackets[i].text === '(') depth--;
-        
-        if (depth === 0) {
-          return { open: brackets[i], close: cursorBracket };
-        }
-      }
-    }
-    
-    return null;
-  }
-
-  // Lint the document for syntax errors
-  private lintDocument(tokens: Token[]): SyntaxError[] {
-    const errors: SyntaxError[] = [];
-    
-    // Check for unmatched brackets
-    const bracketStack: Token[] = [];
-    tokens.forEach(token => {
-      if (token.type === TokenType.Bracket) {
-        if (token.text === '(') {
-          bracketStack.push(token);
-        } else if (token.text === ')') {
-          if (bracketStack.length === 0) {
+          parenStack.push({ token, isFunction });
+          insideFunction = isFunction;
+          expectingOperand = true;
+          expectingComma = false;
+        } else { // closing bracket
+          if (parenStack.length === 0) {
             errors.push({
-              from: token.from,
-              to: token.to,
-              message: 'Unmatched closing bracket'
+              message: `Unmatched closing parenthesis ')'`,
+              token
             });
           } else {
-            bracketStack.pop();
+            const openParen = parenStack.pop()!;
+            insideFunction = parenStack.length > 0 && parenStack[parenStack.length - 1].isFunction;
           }
+          expectingOperand = false;
+          expectingComma = false;
         }
       }
+      else if (token.type === 'operator') {
+        if (token.text === ',') {
+          if (!insideFunction) {
+            errors.push({
+              message: `Unexpected comma outside of function call`,
+              token
+            });
+          } else if (!expectingComma) {
+            errors.push({
+              message: `Unexpected comma`,
+              token
+            });
+          }
+          expectingOperand = true;
+          expectingComma = false;
+        } else { // other operators
+          if (insideFunction) {
+            errors.push({
+              message: `Operators not allowed inside function arguments`,
+              token
+            });
+          } else {
+            if (expectingOperand) {
+              errors.push({
+                message: `Unexpected operator '${token.text}' at start of expression or after another operator`,
+                token
+              });
+            }
+            expectingOperand = true;
+          }
+        }
+      } 
+      else { // property or number
+        if (!expectingOperand && lastToken) {
+          if (insideFunction) {
+            if (!expectingComma && lastToken.type !== 'bracket') {
+              errors.push({
+                message: `Expected comma between function arguments`,
+                token
+              });
+            }
+          } else if (lastToken.type !== 'operator' && lastToken.type !== 'bracket') {
+            errors.push({
+              message: `Missing operator between '${lastToken.text}' and '${token.text}'`,
+              token
+            });
+          }
+        }
+        expectingOperand = false;
+        expectingComma = insideFunction;
+      }
+      lastToken = token;
     });
-    
-    // Add errors for unmatched opening brackets
-    bracketStack.forEach(token => {
+
+    // Check for unclosed parentheses
+    parenStack.forEach(({ token }) => {
       errors.push({
-        from: token.from,
-        to: token.to,
-        message: 'Unmatched opening bracket'
+        message: `Unclosed parenthesis '(' from position ${token.from}`,
+        token
       });
     });
-    
-    // Check for invalid operator sequences
-    for (let i = 0; i < tokens.length - 1; i++) {
-      const current = tokens[i];
-      const next = tokens[i + 1];
-      
-      if (current.type === TokenType.Operator && 
-          next.type === TokenType.Operator &&
-          current.text !== '(' && next.text !== '(' && 
-          current.text !== ')' && next.text !== ')') {
+
+    // Check if expression ends with operator (except closing parenthesis)
+    if (expectingOperand && tokens.length > 0) {
+      const lastToken = tokens[tokens.length - 1];
+      if (lastToken.type === 'operator' && lastToken.text !== ')') {
         errors.push({
-          from: current.from,
-          to: next.to,
-          message: 'Invalid operator sequence'
+          message: `Expression cannot end with operator '${lastToken.text}'`,
+          token: lastToken
         });
       }
     }
-    
+
     return errors;
   }
-} 
+}

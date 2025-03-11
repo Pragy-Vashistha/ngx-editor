@@ -72,6 +72,15 @@ interface Property {
           <h4>Raw View</h4>
           <pre>{{rawContent}}</pre>
         </div>
+
+        <div class="error-panel" *ngIf="syntaxErrors.length > 0">
+          <h4>Syntax Errors</h4>
+          <ol>
+            <li *ngFor="let error of syntaxErrors">
+              {{error.message}}
+            </li>
+          </ol>
+        </div>
       </div>
     </div>
   `,
@@ -155,6 +164,31 @@ interface Property {
       font-size: 12px;
       white-space: pre-wrap;
       word-break: break-all;
+    }
+
+    .error-panel {
+      padding: 1rem;
+      background: #ffebee;
+      border-radius: 4px;
+      margin-top: 1rem;
+    }
+
+    .error-panel h4 {
+      margin: 0 0 0.5rem 0;
+      font-size: 14px;
+      color: #c62828;
+    }
+
+    .error-panel ol {
+      margin: 0;
+      padding-left: 1.5rem;
+    }
+
+    .error-panel li {
+      color: #d32f2f;
+      font-size: 12px;
+      line-height: 1.5;
+      margin-bottom: 0.25rem;
     }
 
     .editor-placeholder {
@@ -303,6 +337,7 @@ export class ProsemirrorEditorComponent implements OnInit, OnDestroy {
     totalNodes: 0,
     selectedNodes: 0
   };
+  syntaxErrors: Array<{ message: string }> = [];
 
   // Available operators for formula building
   operators = ['+', '-', '*', '/', '(', ')'];
@@ -350,14 +385,14 @@ export class ProsemirrorEditorComponent implements OnInit, OnDestroy {
       marks: {}
     });
 
-    // Initialize editor state
+    // Initialize editor state with plugins
     const state = EditorState.create({
       schema: this.schema,
       plugins: [
         history(),
         keymap(baseKeymap),
         this.dragDropService.createPlugin(),
-        this.syntaxHighlightService.createSyntaxHighlightPlugin(),
+        this.syntaxHighlightService.createPlugin(),
         new Plugin({
           key: new PluginKey('statsTracker'),
           state: {
@@ -384,6 +419,8 @@ export class ProsemirrorEditorComponent implements OnInit, OnDestroy {
       dispatchTransaction: (tr) => {
         const newState = this.editorView.state.apply(tr);
         this.editorView.updateState(newState);
+        // Update syntax errors
+        this.syntaxErrors = this.syntaxHighlightService.getErrors();
       }
     });
   }
