@@ -1,8 +1,8 @@
-import { Component, OnInit, OnDestroy, ViewEncapsulation, PLATFORM_ID, Inject, ElementRef, ViewChild } from '@angular/core';
+import { Component, OnInit, OnDestroy, ViewEncapsulation, PLATFORM_ID, Inject, ElementRef, ViewChild, Renderer2 } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { RouterLink } from '@angular/router';
-import { Schema, Node, Slice } from 'prosemirror-model';
+import { Schema, Node, Slice, DOMSerializer, DOMParser } from 'prosemirror-model';
 import { EditorState, Plugin, PluginKey, NodeSelection } from 'prosemirror-state';
 import { EditorView } from 'prosemirror-view';
 import { history } from 'prosemirror-history';
@@ -93,6 +93,29 @@ interface Property {
     </div>
   `,
   styles: [`
+    /* Context Menu Styles */
+    .context-menu {
+      min-width: 120px;
+      border-radius: 4px;
+      background: #fff;
+      border: 1px solid #ccc;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+      z-index: 1000;
+      padding: 8px 0;
+    }
+    
+    .context-menu-item {
+      font-size: 14px;
+      color: #333;
+      padding: 4px 16px;
+      cursor: pointer;
+      transition: background-color 0.2s;
+    }
+    
+    .context-menu-item:hover {
+      background-color: #f0f0f0;
+    }
+    
     .editor-container {
       display: flex;
       flex-direction: column;
@@ -338,6 +361,7 @@ export class ProsemirrorEditorComponent implements OnInit, OnDestroy {
   
   private editorView!: EditorView;
   private schema!: Schema;
+  private contextMenuElement: HTMLElement | null = null;
   
   isBrowser: boolean;
   rawContent = '';
@@ -365,7 +389,8 @@ export class ProsemirrorEditorComponent implements OnInit, OnDestroy {
     @Inject(PLATFORM_ID) platformId: Object,
     private propertyNodeService: PropertyNodeService,
     private dragDropService: DragDropService,
-    private syntaxHighlightService: SyntaxHighlightService
+    private syntaxHighlightService: SyntaxHighlightService,
+    private renderer: Renderer2
   ) {
     this.isBrowser = isPlatformBrowser(platformId);
   }
@@ -430,14 +455,379 @@ export class ProsemirrorEditorComponent implements OnInit, OnDestroy {
         this.editorView.updateState(newState);
         // Update syntax errors
         this.syntaxErrors = this.syntaxHighlightService.getErrors();
+      },
+      handleDOMEvents: {
+        contextmenu: (view, event) => {
+          // Prevent default browser context menu
+          event.preventDefault();
+          
+          // Check if we're right-clicking on a property node
+          const target = event.target as HTMLElement;
+          const propertyNode = target.closest('.property-node') as HTMLElement;
+          
+          if (propertyNode) {
+            // Find the position of the node in the document
+            const pos = this.findNodePosition(view, propertyNode);
+            if (pos !== null) {
+              // Select the node before showing the context menu
+              const tr = view.state.tr.setSelection(NodeSelection.create(view.state.doc, pos));
+              view.dispatch(tr);
+            }
+          }
+          
+          // Show our custom context menu
+          this.showContextMenu(event, view);
+          return true;
+        }
       }
     });
+    
+    // Add a global click listener to close the context menu when clicking outside
+    if (typeof window !== 'undefined') {
+      this.renderer.listen('document', 'click', (event) => {
+        this.closeContextMenu();
+      });
+    }
   }
 
   ngOnDestroy(): void {
     if (this.editorView) {
       this.editorView.destroy();
     }
+    this.closeContextMenu();
+  }
+
+  /**
+   * Shows a custom context menu at the specified position
+   * @param event The mouse event that triggered the context menu
+   * @param view The editor view
+   */
+  /**
+   * Finds the position of a property node in the document
+   * @param view The editor view
+   * @param domNode The DOM node to find
+   * @returns The position of the node or null if not found
+   */
+  private findNodePosition(view: EditorView, domNode: HTMLElement): number | null {
+    // Get the data-id attribute from the property node
+    const nodeId = domNode.getAttribute('data-id');
+    if (!nodeId) return null;
+    
+    let foundPos: number | null = null;
+    
+    // Search through the document for the node with matching id
+    view.state.doc.descendants((node, pos) => {
+      if (node.type.name === 'property' && node.attrs['id'] === nodeId) {
+        foundPos = pos;
+        return false; // Stop searching
+      }
+      return true; // Continue searching
+    });
+    
+    return foundPos;
+  }
+
+  private showContextMenu(event: MouseEvent, view: EditorView): void {
+    // Close any existing context menu
+    this.closeContextMenu();
+    
+    // Create context menu element
+    const contextMenu = this.renderer.createElement('div');
+    this.renderer.addClass(contextMenu, 'context-menu');
+    this.renderer.setStyle(contextMenu, 'position', 'absolute');
+    this.renderer.setStyle(contextMenu, 'left', `${event.pageX}px`);
+    this.renderer.setStyle(contextMenu, 'top', `${event.pageY}px`);
+    this.renderer.setStyle(contextMenu, 'z-index', '1000');
+    
+    // Determine which options to show based on selection
+    const { state } = view;
+    const hasSelection = state.selection.from !== state.selection.to;
+    const hasNodeSelection = state.selection instanceof NodeSelection;
+    
+    // Check if we have a property node selected
+    const isPropertyNodeSelected = hasNodeSelection && 
+                                 (state.selection as NodeSelection).node.type.name === 'property';
+    
+    // Always show all options, but disable them if not applicable
+    this.addMenuItem(contextMenu, 'Delete', () => this.deleteSelection(view), !hasSelection && !hasNodeSelection);
+    this.addMenuItem(contextMenu, 'Copy', () => this.copySelection(view), !hasSelection && !hasNodeSelection);
+    this.addMenuItem(contextMenu, 'Cut', () => this.cutSelection(view), !hasSelection && !hasNodeSelection);
+    this.addMenuItem(contextMenu, 'Paste', () => this.pasteSelection(view), false); // Paste is always enabled
+    
+    // Add to console for debugging
+    if (isPropertyNodeSelected) {
+      console.log('Property node selected:', (state.selection as NodeSelection).node.attrs);
+    }
+    
+    // Add to DOM
+    this.renderer.appendChild(document.body, contextMenu);
+    this.contextMenuElement = contextMenu;
+    
+    // Prevent the menu from being closed immediately by the global click handler
+    setTimeout(() => {
+      if (this.contextMenuElement) {
+        this.renderer.listen(this.contextMenuElement, 'click', (e) => {
+          e.stopPropagation();
+        });
+      }
+    }, 0);
+  }
+  
+  /**
+   * Adds a menu item to the context menu
+   * @param contextMenu The context menu element
+   * @param label The label for the menu item
+   * @param action The action to perform when clicked
+   * @param disabled Whether the menu item should be disabled
+   */
+  private addMenuItem(contextMenu: HTMLElement, label: string, action: () => void, disabled: boolean = false): void {
+    const menuItem = this.renderer.createElement('div');
+    this.renderer.addClass(menuItem, 'context-menu-item');
+    
+    if (disabled) {
+      this.renderer.addClass(menuItem, 'disabled');
+      this.renderer.setStyle(menuItem, 'opacity', '0.5');
+      this.renderer.setStyle(menuItem, 'cursor', 'default');
+    }
+    
+    const text = this.renderer.createText(label);
+    this.renderer.appendChild(menuItem, text);
+    
+    if (!disabled) {
+      this.renderer.listen(menuItem, 'click', (event) => {
+        event.stopPropagation();
+        action();
+        this.closeContextMenu();
+      });
+    }
+    
+    this.renderer.appendChild(contextMenu, menuItem);
+  }
+  
+  /**
+   * Closes the context menu if it's open
+   */
+  private closeContextMenu(): void {
+    if (this.contextMenuElement) {
+      this.renderer.removeChild(document.body, this.contextMenuElement);
+      this.contextMenuElement = null;
+    }
+  }
+  
+  /**
+   * Deletes the selected content
+   * @param view The editor view
+   */
+  private deleteSelection(view: EditorView): void {
+    const { state, dispatch } = view;
+    
+    // Handle node selection (for property nodes)
+    if (state.selection instanceof NodeSelection) {
+      const { from, to } = state.selection;
+      dispatch(state.tr.delete(from, to));
+      return;
+    }
+    
+    // Handle text selection
+    const { from, to } = state.selection;
+    if (from !== to) {
+      dispatch(state.tr.delete(from, to));
+    }
+  }
+  
+  /**
+   * Copies the selected content to the clipboard
+   * @param view The editor view
+   */
+  private copySelection(view: EditorView): void {
+    const { state } = view;
+    
+    try {
+      let slice;
+      let text;
+      
+      // Handle node selection (for property nodes)
+      if (state.selection instanceof NodeSelection) {
+        const node = state.selection.node;
+        if (node.type.name === 'property') {
+          // For property nodes, copy the label
+          text = node.attrs['label'];
+          
+          // Create a slice with just this node
+          const { from, to } = state.selection;
+          slice = state.doc.slice(from, to);
+        } else {
+          return; // Unsupported node type
+        }
+      } else {
+        // Handle text selection
+        const { from, to } = state.selection;
+        if (from === to) return; // Nothing selected
+        
+        slice = state.doc.slice(from, to);
+        text = state.doc.textBetween(from, to, ' ');
+      }
+      
+      // Serialize to HTML for rich text clipboard data
+      const serializer = DOMSerializer.fromSchema(state.schema);
+      const fragment = serializer.serializeFragment(slice.content);
+      const tempDiv = document.createElement('div');
+      tempDiv.appendChild(fragment);
+      const html = tempDiv.innerHTML;
+      
+      // Use the Clipboard API if available
+      if (navigator.clipboard && window.ClipboardItem) {
+        const clipboardItems = [
+          new ClipboardItem({
+            'text/html': new Blob([html], { type: 'text/html' }),
+            'text/plain': new Blob([text], { type: 'text/plain' })
+          })
+        ];
+        navigator.clipboard.write(clipboardItems).catch(err => {
+          console.error('Failed to copy with Clipboard API:', err);
+          this.fallbackCopy(text);
+        });
+      } else {
+        // Fallback for browsers without Clipboard API support
+        this.fallbackCopy(text);
+      }
+    } catch (err) {
+      console.error('Error during copy operation:', err);
+    }
+  }
+  
+  /**
+   * Fallback copy method using execCommand
+   * @param text The text to copy
+   */
+  private fallbackCopy(text: string): void {
+    const textArea = document.createElement('textarea');
+    textArea.value = text;
+    textArea.style.position = 'fixed';
+    textArea.style.opacity = '0';
+    document.body.appendChild(textArea);
+    textArea.select();
+    
+    try {
+      document.execCommand('copy');
+    } catch (err) {
+      console.error('Fallback copy failed:', err);
+    }
+    
+    document.body.removeChild(textArea);
+  }
+  
+  /**
+   * Cuts the selected content (copy + delete)
+   * @param view The editor view
+   */
+  private cutSelection(view: EditorView): void {
+    // First copy the selection
+    this.copySelection(view);
+    
+    // Then delete it
+    this.deleteSelection(view);
+  }
+  
+  /**
+   * Pastes content from the clipboard
+   * @param view The editor view
+   */
+  private pasteSelection(view: EditorView): void {
+    const { state, dispatch } = view;
+    
+    try {
+      if (navigator.clipboard) {
+        // Try to read HTML content first
+        navigator.clipboard.read().then(clipboardItems => {
+          // Find HTML content if available
+          const htmlItem = clipboardItems.find(item => item.types.includes('text/html'));
+          
+          if (htmlItem) {
+            htmlItem.getType('text/html')
+              .then(blob => blob.text())
+              .then(html => {
+                this.insertHtmlContent(view, html);
+              })
+              .catch(err => {
+                console.error('Error getting HTML from clipboard:', err);
+                this.fallbackPaste(view);
+              });
+          } else {
+            // Try plain text
+            navigator.clipboard.readText()
+              .then(text => {
+                if (text) {
+                  dispatch(state.tr.insertText(text, state.selection.from));
+                }
+              })
+              .catch(err => {
+                console.error('Error getting text from clipboard:', err);
+                this.fallbackPaste(view);
+              });
+          }
+        }).catch(err => {
+          console.error('Error reading from clipboard:', err);
+          this.fallbackPaste(view);
+        });
+      } else {
+        this.fallbackPaste(view);
+      }
+    } catch (err) {
+      console.error('Error during paste operation:', err);
+      this.fallbackPaste(view);
+    }
+  }
+  
+  /**
+   * Inserts HTML content into the editor
+   * @param view The editor view
+   * @param html The HTML content to insert
+   */
+  private insertHtmlContent(view: EditorView, html: string): void {
+    try {
+      const { state, dispatch } = view;
+      const parser = DOMParser.fromSchema(state.schema);
+      
+      // Parse the HTML content
+      const container = document.createElement('div');
+      container.innerHTML = html;
+      
+      const slice = parser.parseSlice(container);
+      dispatch(state.tr.replaceSelection(slice));
+    } catch (err) {
+      console.error('Error inserting HTML content:', err);
+      // Fallback to plain text insertion if HTML parsing fails
+      const plainText = this.stripHtml(html);
+      view.dispatch(view.state.tr.insertText(plainText, view.state.selection.from));
+    }
+  }
+  
+  /**
+   * Fallback paste method using document.execCommand
+   * @param view The editor view
+   */
+  private fallbackPaste(view: EditorView): void {
+    // Focus the editor to ensure it receives the paste event
+    view.focus();
+    
+    try {
+      // Try to trigger a paste event
+      document.execCommand('paste');
+    } catch (err) {
+      console.error('Fallback paste failed:', err);
+    }
+  }
+  
+  /**
+   * Strips HTML tags from a string
+   * @param html The HTML string to strip
+   * @returns Plain text without HTML tags
+   */
+  private stripHtml(html: string): string {
+    const temp = document.createElement('div');
+    temp.innerHTML = html;
+    return temp.textContent || temp.innerText || '';
   }
 
   /**

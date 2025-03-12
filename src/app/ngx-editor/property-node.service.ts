@@ -164,7 +164,10 @@ class PropertyNodeView implements NodeView {
    * @returns Boolean indicating if event should be stopped
    */
   stopEvent(event: Event): boolean {
-    return event.type !== 'click' && !['dragstart', 'dragover', 'dragleave', 'dragend', 'drop'].includes(event.type);
+    // Allow click, contextmenu, and drag-related events to pass through
+    return event.type !== 'click' && 
+           event.type !== 'contextmenu' && 
+           !['dragstart', 'dragover', 'dragleave', 'dragend', 'drop'].includes(event.type);
   }
 
   /**
